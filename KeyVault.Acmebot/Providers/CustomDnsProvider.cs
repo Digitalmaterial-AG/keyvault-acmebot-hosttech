@@ -4,10 +4,9 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading.Tasks;
-
+using System.Text;
 using KeyVault.Acmebot.Internal;
 using KeyVault.Acmebot.Options;
-
 using Newtonsoft.Json;
 
 namespace KeyVault.Acmebot.Providers;
@@ -36,41 +35,106 @@ public class CustomDnsProvider : IDnsProvider
     public async Task<IReadOnlyList<DnsZone>> ListZonesAsync()
     {
         var response = await _httpClient.GetAsync("zones");
+        var content = await response.Content.ReadAsStringAsync();
 
         response.EnsureSuccessStatusCode();
 
-        var zones = await response.Content.ReadAsAsync<Zone[]>();
+        var zoneResponse = JsonConvert.DeserializeObject<ZoneResponse>(content);
 
-        return zones.Select(x => new DnsZone(this) { Id = x.Id, Name = x.Name, NameServers = x.NameServers }).ToArray();
+        if (zoneResponse == null || zoneResponse.Data == null)
+            throw new Exception($"Deserialization failed or 'data' is null. Raw content: {content}");
+
+        return zoneResponse.Data.Select(x => new DnsZone(this)
+        {
+            Id = x.Id.ToString(),
+            Name = x.Name,
+            NameServers = new[] { x.NameServer }
+        }).ToArray();
     }
 
     public async Task CreateTxtRecordAsync(DnsZone zone, string relativeRecordName, IEnumerable<string> values)
     {
-        var recordName = $"{relativeRecordName}.{zone.Name}";
+        var payload = new
+        {
+            type = "TXT",
+            name = relativeRecordName,
+            text = values.First(),
+            ttl = 3600
+        };
 
-        var response = await _httpClient.PutAsync($"zones/{zone.Id}/records/{recordName}", new { type = "TXT", ttl = 60, values });
+        var content = new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json");
 
-        response.EnsureSuccessStatusCode();
+        var response = await _httpClient.PostAsync($"zones/{zone.Id}/records", content);
+        var respContent = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+            throw new Exception($"Failed to create TXT record: {response.StatusCode} - {respContent}");
+
+        Console.WriteLine($"CreateTxtRecordAsync response: {respContent}");
     }
 
     public async Task DeleteTxtRecordAsync(DnsZone zone, string relativeRecordName)
     {
-        var recordName = $"{relativeRecordName}.{zone.Name}";
+        var recordsResponse = await _httpClient.GetAsync($"zones/{zone.Id}/records");
+        recordsResponse.EnsureSuccessStatusCode();
 
-        var response = await _httpClient.DeleteAsync($"zones/{zone.Id}/records/{recordName}");
+        var json = await recordsResponse.Content.ReadAsStringAsync();
+        var recordData = JsonConvert.DeserializeObject<RecordResponse>(json);
 
-        response.EnsureSuccessStatusCode();
+        foreach (var rec in recordData.Data.Where(r => r.Type == "TXT"))
+            Console.WriteLine($"TXT record: name='{rec.Name}', text='{rec.Text}'");
+
+        var txtRecord = recordData.Data
+            .FirstOrDefault(r => r.Type == "TXT" && 
+                (r.Name.Equals(relativeRecordName, StringComparison.OrdinalIgnoreCase) ||
+                 r.Name.EndsWith(relativeRecordName, StringComparison.OrdinalIgnoreCase)));
+
+        if (txtRecord == null)
+        {
+            Console.WriteLine($"TXT record '{relativeRecordName}' not found in zone '{zone.Name}', nothing to delete.");
+            return;
+        }
+
+        var deleteResponse = await _httpClient.DeleteAsync($"zones/{zone.Id}/records/{txtRecord.Id}");
+        deleteResponse.EnsureSuccessStatusCode();
+    }
+
+    private class ZoneResponse
+    {
+        [JsonProperty("data")]
+        public List<Zone> Data { get; set; }
     }
 
     private class Zone
     {
         [JsonProperty("id")]
-        public string Id { get; set; }
+        public int Id { get; set; }
 
         [JsonProperty("name")]
         public string Name { get; set; }
 
-        [JsonProperty("nameServers")]
-        public string[] NameServers { get; set; }
+        [JsonProperty("nameserver")]
+        public string NameServer { get; set; }
+    }
+
+    private class RecordResponse
+    {
+        [JsonProperty("data")]
+        public List<Record> Data { get; set; }
+    }
+
+    private class Record
+    {
+        [JsonProperty("id")]
+        public int Id { get; set; }
+
+        [JsonProperty("type")]
+        public string Type { get; set; }
+
+        [JsonProperty("name")]
+        public string Name { get; set; }
+
+        [JsonProperty("text")]
+        public string Text { get; set; }
     }
 }

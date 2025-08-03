@@ -58,11 +58,6 @@ jobs:
         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-    - name: Use Bicep ${{ env.BICEP_VERSION }}
-      run: |
-        az config set bicep.use_binary_from_path=false
-        az bicep install --version v${{ env.BICEP_VERSION }}
-
     - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
@@ -70,10 +65,5 @@ jobs:
 
     - name: Upload to Blob
       run: |
-        az storage blob upload --auth-mode login -f latest.zip --account-name stacmebotprod -c keyvault-acmebot -n v4/latest.zip --overwrite
-        az storage blob upload --auth-mode login -f latest.zip --account-name stacmebotprod -c keyvault-acmebot -n v4/${{ needs.publish.outputs.version }}.zip --overwrite
-
-    - name: Publish to Private Registry
-      run: |
-        az bicep publish --file azuredeploy.bicep --target br:cracmebotprod.azurecr.io/bicep/modules/keyvault-acmebot:v4 --force
-        az bicep publish --file azuredeploy.bicep --target br:cracmebotprod.azurecr.io/bicep/modules/keyvault-acmebot:v${{ needs.publish.outputs.version }} --force
+        az storage blob upload --auth-mode login -f latest.zip --account-name stdgmtacmebot01 -c keyvault-acmebot -n v4/latest.zip --overwrite
+        az storage blob upload --auth-mode login -f latest.zip --account-name stdgmtacmebot01 -c keyvault-acmebot -n v4/${{ needs.publish.outputs.version }}.zip --overwrite
